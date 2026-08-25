@@ -33,71 +33,30 @@ function wrap(message: unknown): ReturnType<NamedError["toObject"]> {
 }
 
 describe("session.retry.delay", () => {
-  test("caps delay at 30 seconds when headers missing", () => {
-    const error = apiError()
-    const delays = Array.from({ length: 10 }, (_, index) => SessionRetry.delay(index + 1, error, 0))
+  test("grows exponentially and caps at 30 seconds", () => {
+    const delays = Array.from({ length: 10 }, (_, index) => SessionRetry.delay(index + 1, 0))
     expect(delays).toStrictEqual([2000, 4000, 8000, 16000, 30000, 30000, 30000, 30000, 30000, 30000])
   })
 
   test("adds jitter to exponential delays", () => {
-    const error = apiError()
-    expect(SessionRetry.delay(1, error, 0)).toBe(2000)
-    expect(SessionRetry.delay(1, error, 1)).toBe(2500)
-    expect(SessionRetry.delay(4, error, 1)).toBe(20000)
-    expect(SessionRetry.delay(5, error, 1)).toBe(30000)
+    expect(SessionRetry.delay(1, 0)).toBe(2000)
+    expect(SessionRetry.delay(1, 1)).toBe(2500)
+    expect(SessionRetry.delay(4, 1)).toBe(20000)
+    expect(SessionRetry.delay(5, 1)).toBe(30000)
   })
 
-  test("prefers retry-after-ms when shorter than exponential", () => {
+  test("ignores retry-after headers", () => {
     const error = apiError({ "retry-after-ms": "1500" })
-    expect(SessionRetry.delay(4, error)).toBe(1500)
-  })
+    expect(SessionRetry.delay(4, 1)).toBe(20000)
 
-  test("uses retry-after seconds when reasonable", () => {
-    const error = apiError({ "retry-after": "30" })
-    expect(SessionRetry.delay(3, error)).toBe(30000)
-  })
-
-  test("accepts http-date retry-after values", () => {
-    const date = new Date(Date.now() + 20000).toUTCString()
-    const error = apiError({ "retry-after": date })
-    const d = SessionRetry.delay(1, error)
-    expect(d).toBeGreaterThanOrEqual(19000)
-    expect(d).toBeLessThanOrEqual(20000)
-  })
-
-  test("ignores invalid retry hints", () => {
-    const error = apiError({ "retry-after": "not-a-number" })
-    expect(SessionRetry.delay(1, error, 0)).toBe(2000)
-  })
-
-  test("ignores malformed date retry hints", () => {
-    const error = apiError({ "retry-after": "Invalid Date String" })
-    expect(SessionRetry.delay(1, error, 0)).toBe(2000)
-  })
-
-  test("ignores past date retry hints", () => {
-    const pastDate = new Date(Date.now() - 5000).toUTCString()
-    const error = apiError({ "retry-after": pastDate })
-    expect(SessionRetry.delay(1, error, 0)).toBe(2000)
-  })
-
-  test("uses retry-after values even when exceeding 10 minutes with headers", () => {
-    const error = apiError({ "retry-after": "50" })
-    expect(SessionRetry.delay(1, error)).toBe(50000)
-
-    const longError = apiError({ "retry-after-ms": "700000" })
-    expect(SessionRetry.delay(1, longError)).toBe(700000)
-  })
-
-  test("caps oversized header delays to the runtime timer limit", () => {
-    const error = apiError({ "retry-after-ms": "999999999999" })
-    expect(SessionRetry.delay(1, error)).toBe(SessionRetry.RETRY_MAX_DELAY)
+    const secondsError = apiError({ "retry-after": "50" })
+    expect(SessionRetry.delay(1, 0)).toBe(2000)
   })
 
   it.instance("policy updates retry status and increments attempts", () =>
     Effect.gen(function* () {
       const sessionID = SessionID.make("session-retry-test")
-      const error = apiError({ "retry-after-ms": "0" })
+      const error = apiError()
       const status = yield* SessionStatus.Service
 
       const step = yield* Schedule.toStepWithMetadata(
@@ -124,10 +83,10 @@ describe("session.retry.delay", () => {
     }),
   )
 
-  it.instance("policy stops after five retries", () =>
+  it.instance("policy retries indefinitely", () =>
     Effect.gen(function* () {
       const attempts: number[] = []
-      const error = apiError({ "retry-after-ms": "0" })
+      const error = apiError()
       const step = yield* Schedule.toStepWithMetadata(
         SessionRetry.policy({
           provider: "test",
@@ -139,11 +98,9 @@ describe("session.retry.delay", () => {
         }),
       )
 
-      yield* Effect.forEach(Array.from({ length: SessionRetry.RETRY_MAX_RETRIES + 1 }), () =>
-        Effect.ignore(step(error)),
-      )
+      yield* Effect.forEach(Array.from({ length: 12 }), () => Effect.ignore(step(error)))
 
-      expect(attempts).toStrictEqual([1, 2, 3, 4, 5])
+      expect(attempts).toStrictEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
     }),
   )
 })

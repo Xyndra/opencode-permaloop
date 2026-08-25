@@ -43,6 +43,66 @@
 
 ---
 
+### Permaloop patch (this fork)
+
+This is a private patch of upstream `v1.18.23` with one change: the provider
+retry loop no longer gives up after 5 attempts.
+
+- Retry delays still grow exponentially (2s, 4s, 8s, ...) but are capped flat at
+  **30 seconds** and stay there forever.
+- The session never fails on transient errors - it retries indefinitely
+  ("permaloop"). Cancel with the usual abort key.
+- Server `Retry-After` headers are ignored so a provider can never force a
+  multi-minute stall; everything waits at most 30s between attempts.
+
+The change lives entirely in
+`packages/opencode/src/session/retry.ts` (plus its tests).
+
+#### Install on another machine
+
+**Option A - prebuilt binary (linux-x64):**
+
+```bash
+gh release download v1.18.23-permaloop --repo Xyndra/opencode-permaloop --pattern 'opencode-linux-x64.tar.gz' --clobber
+tar -xzf opencode-linux-x64.tar.gz opencode && rm opencode-linux-x64.tar.gz
+
+# back up the current install, then swap in the patched build atomically
+cp ~/.opencode/bin/opencode ~/.opencode/bin/opencode.vanilla 2>/dev/null || true
+mv -f opencode ~/.opencode/bin/opencode && chmod +x ~/.opencode/bin/opencode
+```
+
+**Option B - build from source:**
+
+```bash
+git clone -b permaloop-retry https://github.com/Xyndra/opencode-permaloop.git
+cd opencode-permaloop/packages/opencode
+
+bun install --ignore-scripts          # bun >= 1.3.14 required
+export PATH="/path/to/bun-1.3.14:$PATH"
+
+# These env vars are REQUIRED:
+#   channel "latest" makes the binary use the standard opencode.db database;
+#   anything else creates an empty sidecar DB and your sessions "disappear".
+OPENCODE_CHANNEL=latest OPENCODE_VERSION=1.18.23 \
+  bun run build --single --skip-install --skip-embed-web-ui
+
+install -m755 dist/opencode-linux-x64/bin/opencode ~/.opencode/bin/opencode
+```
+
+> [!IMPORTANT]
+> After installing, disable the self-updater or it will silently overwrite the
+> patch on the next release:
+>
+> ```jsonc
+> // ~/.config/opencode/opencode.jsonc
+> { "autoupdate": false }
+> ```
+
+To restore the stock build at any time:
+`curl -fsSL https://opencode.ai/install | bash` (or move the backup above back).
+
+---
+
 ### Installation
 
 ```bash
